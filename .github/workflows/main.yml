@@ -14,10 +14,10 @@ jobs:
       - name: Find the correct ZIP file
         id: find_zip
         run: |
-          ZIP_FILE="./rider-salary-tracker (3).zip"
+          ZIP_FILE="./rider-salary-tracker (4).zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: rider-salary-tracker (3).zip was not found!"
+            echo "ERROR: rider-salary-tracker (4).zip was not found!"
             echo "Files in repository:"
             ls -la
             exit 1
@@ -63,39 +63,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Get Debug SHA-1
-        run: |
-          echo "===== DEBUG KEY SHA-1 ====="
-
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            echo "Debug keystore not found. Creating standard Android debug keystore..."
-
-            mkdir -p "$HOME/.android"
-
-            keytool -genkeypair \
-              -v \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
-          keytool -list -v \
-            -keystore "$HOME/.android/debug.keystore" \
-            -alias androiddebugkey \
-            -storepass android \
-            -keypass android | grep -i "SHA1:"
-
       - name: Install Gradle 9.3.1
         run: |
           wget -q https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
-
           unzip -q gradle-9.3.1-bin.zip
-
           echo "$PWD/gradle-9.3.1/bin" >> "$GITHUB_PATH"
 
           echo "===== Gradle version ====="
