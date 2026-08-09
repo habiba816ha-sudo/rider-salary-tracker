@@ -11,55 +11,76 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract ZIP
+      - name: Find ZIP file
+        id: find_zip
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          echo "Searching for ZIP files..."
+          find . -type f -iname "*.zip" -print
+
+          ZIP_FILE=$(find . -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ZIP file not found!"
+            echo "ERROR: No ZIP file found!"
             exit 1
           fi
 
-          echo "Found: $ZIP_FILE"
+          echo "Found ZIP: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Android project
+        run: |
+          ZIP_FILE="${{ steps.find_zip.outputs.zip_file }}"
 
           mkdir -p project
-          unzip -q "$ZIP_FILE" -d project
+          unzip -o "$ZIP_FILE" -d project
 
-          echo "Extracted files:"
-          find project -maxdepth 3 -type f | head -100
+          echo "===== Extracted files ====="
+          find project -maxdepth 4 -type f | head -200
 
-      - name: Locate Android project
+      - name: Locate Gradle project
+        id: locate
         run: |
-          if [ -f "project/gradlew" ]; then
-            echo "PROJECT_DIR=project" >> $GITHUB_ENV
-          else
-            GRADLEW=$(find project -name gradlew -type f | head -n 1)
+          echo "Searching for gradlew..."
 
-            if [ -z "$GRADLEW" ]; then
-              echo "gradlew not found!"
-              exit 1
-            fi
+          GRADLEW=$(find project -type f -name "gradlew" | head -n 1)
 
-            PROJECT_DIR=$(dirname "$GRADLEW")
-            echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          if [ -z "$GRADLEW" ]; then
+            echo "ERROR: gradlew was not found!"
+            echo "Searching project structure:"
+            find project -maxdepth 5 -type f | head -300
+            exit 1
           fi
 
-      - name: Make Gradle executable
-        run: |
-          chmod +x "$PROJECT_DIR/gradlew"
+          PROJECT_DIR=$(dirname "$GRADLEW")
 
-      - name: Set up JDK
+          echo "Found gradlew at: $GRADLEW"
+          echo "Project directory: $PROJECT_DIR"
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      - name: Make Gradle executable
+        run: |
+          chmod +x "${{ steps.locate.outputs.project_dir }}/gradlew"
+
       - name: Build Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: ./gradlew assembleDebug --stacktrace
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Find APK
+        run: |
+          echo "===== APK files ====="
+          find "${{ steps.locate.outputs.project_dir }}" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: rider-salary-tracker-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
