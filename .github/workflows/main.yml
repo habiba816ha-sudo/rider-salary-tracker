@@ -1,171 +1,335 @@
-name: Diagnose Android Project
+name: Build APK
 
 on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
+  build:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Check ZIP
+
+      # ============================================================
+      # 2. Find ZIP
+      # ============================================================
+      - name: Find project ZIP
+        id: find_zip
         run: |
-          echo "===== REPOSITORY FILES ====="
-          find . -maxdepth 3 -type f -print
+          echo "===== FINDING ZIP ====="
 
           ZIP_FILE="./rider-salary-tracker (4).zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "ERROR: ZIP file not found!"
+            echo "Repository files:"
+            find . -maxdepth 3 -type f -print
             exit 1
           fi
 
-          echo "ZIP FOUND: $ZIP_FILE"
+          echo "ZIP FOUND:"
+          echo "$ZIP_FILE"
 
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+
+      # ============================================================
+      # 3. Inspect ZIP contents
+      # ============================================================
       - name: Inspect ZIP contents
         run: |
-          ZIP_FILE="./rider-salary-tracker (4).zip"
+          echo "===== ZIP CONTENTS ====="
+
+          unzip -l "${{ steps.find_zip.outputs.zip_file }}" | head -300
 
           echo ""
-          echo "======================================"
-          echo "        ZIP CONTENTS"
-          echo "======================================"
+          echo "===== SEARCHING FOR KEYSTORE FILES ====="
 
-          unzip -l "$ZIP_FILE"
+          unzip -l "${{ steps.find_zip.outputs.zip_file }}" \
+            | grep -Ei 'debug\.keystore|keystore|\.jks|\.p12' \
+            || echo "No keystore-related file found in ZIP."
 
-      - name: Extract project
+
+      # ============================================================
+      # 4. Extract project
+      # ============================================================
+      - name: Extract Android project
         run: |
-          ZIP_FILE="./rider-salary-tracker (4).zip"
+          echo "===== EXTRACTING PROJECT ====="
 
           mkdir -p project
-          unzip -o "$ZIP_FILE" -d project
+
+          unzip -o "${{ steps.find_zip.outputs.zip_file }}" \
+            -d project
 
           echo ""
-          echo "======================================"
-          echo "       PROJECT STRUCTURE"
-          echo "======================================"
+          echo "===== EXTRACTED FILES ====="
 
-          find project -maxdepth 6 -type f -print | sort
+          find project -maxdepth 6 -type f | head -300
 
+
+      # ============================================================
+      # 5. Locate Android project
+      # ============================================================
       - name: Locate Android project
         id: locate
         run: |
+          echo "===== LOCATING ANDROID PROJECT ====="
+
           SETTINGS_FILE=$(find project -type f \( \
             -name "settings.gradle.kts" \
             -o -name "settings.gradle" \
           \) | head -n 1)
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle(.kts) not found!"
+            echo "ERROR: Android Gradle project not found!"
+
+            echo "Searching all files:"
+            find project -type f | head -500
+
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
+          echo ""
           echo "Android project:"
           echo "$PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Find keystore files
+
+      # ============================================================
+      # 6. Search for debug.keystore.base64
+      # ============================================================
+      - name: Find debug keystore
+        id: find_keystore
         working-directory: ${{ steps.locate.outputs.project_dir }}
         run: |
-          echo ""
-          echo "======================================"
-          echo "        KEYSTORE FILES"
-          echo "======================================"
+          echo "===== SEARCHING FOR debug.keystore.base64 ====="
 
-          find . -type f \( \
-            -iname "*.keystore" \
-            -o -iname "*.jks" \
-            -o -iname "*.base64" \
-          \) -print
+          KEYSTORE_BASE64=$(find .. -type f \
+            -name "debug.keystore.base64" \
+            | head -n 1)
 
-          echo ""
-          echo "Checking specifically for debug.keystore.base64..."
-
-          if find . -type f -name "debug.keystore.base64" | grep -q .; then
-            echo "FOUND: debug.keystore.base64"
-          else
-            echo "NOT FOUND: debug.keystore.base64"
-          fi
-
-      - name: Inspect Gradle signing configuration
-        working-directory: ${{ steps.locate.outputs.project_dir }}
-        run: |
-          echo ""
-          echo "======================================"
-          echo "        GRADLE CONFIGURATION"
-          echo "======================================"
-
-          if [ -f "app/build.gradle.kts" ]; then
+          if [ -z "$KEYSTORE_BASE64" ]; then
             echo ""
-            echo "===== app/build.gradle.kts ====="
+            echo "ERROR:"
+            echo "debug.keystore.base64 was NOT found."
+            echo ""
+            echo "All keystore-related files:"
+            find .. -type f \
+              \( \
+                -name "*.keystore" \
+                -o -name "*.jks" \
+                -o -name "*.p12" \
+                -o -name "*keystore*" \
+              \) \
+              -print
 
-            grep -n -E \
-              "applicationId|namespace|signingConfigs|signingConfig|debug|release|keystore|storeFile|keyAlias" \
-              app/build.gradle.kts || true
-          else
-            echo "ERROR: app/build.gradle.kts not found!"
+            exit 1
           fi
 
-      - name: Inspect Google configuration
+          echo ""
+          echo "FOUND:"
+          echo "$KEYSTORE_BASE64"
+
+          echo "keystore_file=$KEYSTORE_BASE64" >> "$GITHUB_OUTPUT"
+
+
+      # ============================================================
+      # 7. Restore fixed debug keystore
+      # ============================================================
+      - name: Restore fixed debug keystore
         working-directory: ${{ steps.locate.outputs.project_dir }}
         run: |
+          echo "===== RESTORING DEBUG KEYSTORE ====="
+
+          KEYSTORE_BASE64="${{ steps.find_keystore.outputs.keystore_file }}"
+
+          mkdir -p ~/.android
+
+          base64 -d "$KEYSTORE_BASE64" > ~/.android/debug.keystore
+
+          chmod 600 ~/.android/debug.keystore
+
           echo ""
-          echo "======================================"
-          echo "        GOOGLE CONFIGURATION
-          ======================================"
+          echo "Debug keystore restored:"
+          ls -lh ~/.android/debug.keystore
 
-          echo "google-services.json files:"
-          find . -type f -name "google-services.json" -print
 
-          echo ""
-          echo "OAuth / Google related files:"
-          find . -type f | grep -Ei \
-            "google|oauth|firebase|drive|credential" || true
-
-      - name: Inspect workflow
+      # ============================================================
+      # 8. Verify keystore SHA-1
+      # ============================================================
+      - name: Verify debug keystore SHA-1
         run: |
+          echo "===== DEBUG KEYSTORE SHA-1 ====="
+
+          keytool \
+            -list \
+            -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            | grep -E "Alias name:|SHA1:|SHA-1:"
+
+
+      # ============================================================
+      # 9. Setup Java
+      # ============================================================
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+
+      # ============================================================
+      # 10. Install Gradle
+      # ============================================================
+      - name: Install Gradle 9.3.1
+        run: |
+          echo "===== INSTALLING GRADLE ====="
+
+          wget -q \
+            https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
+
+          unzip -q gradle-9.3.1-bin.zip
+
+          echo "$PWD/gradle-9.3.1/bin" >> "$GITHUB_PATH"
+
           echo ""
-          echo "======================================"
-          echo "        WORKFLOW FILES"
-          echo "======================================"
+          echo "===== GRADLE VERSION ====="
 
-          find .github/workflows -type f -maxdepth 2 -print
+          gradle --version
 
-      - name: Summary
+
+      # ============================================================
+      # 11. Verify Android project
+      # ============================================================
+      - name: Verify Android project
         working-directory: ${{ steps.locate.outputs.project_dir }}
         run: |
-          echo ""
-          echo "======================================"
-          echo "        DIAGNOSTIC SUMMARY"
-          echo "======================================"
+          echo "===== PROJECT FILES ====="
+          ls -la
 
           echo ""
-          echo "Application ID:"
-          grep -n "applicationId" app/build.gradle.kts || true
+          echo "===== APP MODULE ====="
+          ls -la app
+
+
+      # ============================================================
+      # 12. Show applicationId and signing configuration
+      # ============================================================
+      - name: Inspect Gradle configuration
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          echo "===== APPLICATION ID ====="
+
+          grep -R \
+            'applicationId' \
+            app/build.gradle.kts \
+            || true
 
           echo ""
-          echo "Namespace:"
-          grep -n "namespace" app/build.gradle.kts || true
+          echo "===== SIGNING CONFIGURATION ====="
+
+          grep -n -A20 -B5 \
+            'signingConfigs' \
+            app/build.gradle.kts \
+            || true
+
+
+      # ============================================================
+      # 13. Clean
+      # ============================================================
+      - name: Clean project
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          echo "===== CLEANING PROJECT ====="
+
+          gradle clean --stacktrace
+
+
+      # ============================================================
+      # 14. Build Debug APK
+      # ============================================================
+      - name: Build Debug APK
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          echo "===== BUILDING DEBUG APK ====="
+
+          gradle assembleDebug --stacktrace
+
+
+      # ============================================================
+      # 15. Verify APK
+      # ============================================================
+      - name: Verify APK SHA-1
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          echo "===== FINDING APK ====="
+
+          APK=$(find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK NOT FOUND!"
+            exit 1
+          fi
 
           echo ""
-          echo "Debug signing configuration:"
-          grep -n -A8 -B3 "debug" app/build.gradle.kts || true
+          echo "APK:"
+          echo "$APK"
 
           echo ""
-          echo "Keystore files:"
-          find . -type f \( \
-            -iname "*.keystore" \
-            -o -iname "*.jks" \
-            -o -iname "*.base64" \
-          \) -print
+          echo "===== APK CERTIFICATE ====="
 
-          echo ""
-          echo "======================================"
-          echo "        DIAGNOSTIC COMPLETE"
-          echo "======================================"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+            -type f \
+            -name "apksigner" \
+            | sort -V \
+            | tail -n 1)
+
+          if [ -z "$APKSIGNER" ]; then
+            echo "ERROR: apksigner not found!"
+            exit 1
+          fi
+
+          "$APKSIGNER" \
+            verify \
+            --print-certs \
+            "$APK"
+
+
+      # ============================================================
+      # 16. Show APK files
+      # ============================================================
+      - name: Find generated APK
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          echo "===== GENERATED APK FILES ====="
+
+          find app/build/outputs \
+            -type f \
+            -name "*.apk" \
+            -print
+
+
+      # ============================================================
+      # 17. Upload APK
+      # ============================================================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rider-salary-tracker-apk
+          path: ${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
