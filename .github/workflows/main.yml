@@ -81,10 +81,57 @@ jobs:
           echo "===== App module ====="
           ls -la app
 
+      - name: Restore Fixed Debug Keystore
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          echo "===== Searching for fixed debug keystore ====="
+
+          KEYSTORE_FILE=$(find . -type f -name "debug.keystore.base64" | head -n 1)
+
+          if [ -z "$KEYSTORE_FILE" ]; then
+            echo "ERROR: debug.keystore.base64 was not found!"
+            echo "Searching project:"
+            find . -type f | sort
+            exit 1
+          fi
+
+          echo "Found: $KEYSTORE_FILE"
+
+          mkdir -p "$HOME/.android"
+
+          base64 -d "$KEYSTORE_FILE" > "$HOME/.android/debug.keystore"
+
+          echo "===== Debug keystore restored ====="
+
+          keytool -list \
+            -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            | grep -E "Alias name:|SHA1:"
+
       - name: Build Debug APK
         working-directory: ${{ steps.locate.outputs.project_dir }}
         run: |
           gradle assembleDebug --stacktrace
+
+      - name: Verify APK SHA-1
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          APK=$(find app/build/outputs/apk/debug -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found!"
+            exit 1
+          fi
+
+          echo "===== APK ====="
+          echo "$APK"
+
+          echo "===== APK signing certificate ====="
+          $ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)/apksigner \
+            verify \
+            --print-certs \
+            "$APK"
 
       - name: Find generated APK
         run: |
